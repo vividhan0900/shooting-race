@@ -1,0 +1,589 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>슈팅 레이스</title>
+<style>
+  :root{--bg:#0d1117;--panel:#161b22;--line:#30363d;--text:#e6edf3;--muted:#8b949e;--accent:#ffb020;--blue:#4aa3ff}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font-family:"Malgun Gothic","Apple SD Gothic Neo",system-ui,sans-serif;overflow:hidden}
+  canvas{position:fixed;inset:0;display:block}
+  .overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(13,17,23,.92);z-index:5;overflow:auto;padding:16px}
+  .overlay.hidden{display:none}
+  .box{width:min(980px,100%);}
+  h1{margin:0 0 4px;font-size:34px;letter-spacing:1px}
+  h1 span{color:var(--accent)}
+  .sub{color:var(--muted);margin:0 0 18px}
+  h2{font-size:15px;margin:18px 0 8px;color:var(--accent)}
+  .grid{display:grid;gap:10px}
+  .cars{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+  .skills{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+  .card{background:var(--panel);border:2px solid var(--line);border-radius:10px;padding:12px;cursor:pointer;transition:.12s}
+  .card:hover{border-color:#58a6ff}
+  .card.sel{border-color:var(--accent);background:#1f1a0e}
+  .card b{font-size:16px}
+  .card .meta{color:var(--muted);font-size:12.5px;margin-top:4px;line-height:1.55}
+  .card .flaw{color:#ff8b8b}
+  .swatch{display:inline-block;width:26px;height:12px;border-radius:3px;margin-right:8px;vertical-align:middle}
+  button{background:var(--accent);color:#1a1200;border:0;border-radius:8px;padding:12px 28px;font-size:17px;font-weight:700;cursor:pointer;font-family:inherit}
+  button:disabled{background:#3a3f47;color:#888;cursor:not-allowed}
+  .row{display:flex;align-items:center;gap:14px;margin-top:18px;flex-wrap:wrap}
+  .hint{color:var(--muted);font-size:13px}
+  #center{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none;z-index:4;text-align:center}
+  #center .big{font-size:120px;font-weight:900;text-shadow:0 4px 24px #000}
+  #center .msg{font-size:34px;font-weight:800;text-shadow:0 2px 12px #000}
+  #result{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(13,17,23,.78);z-index:6}
+  #result .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px 34px;min-width:320px;text-align:center}
+  #result h2{font-size:30px;margin:0 0 6px;color:var(--text)}
+  #result ol{text-align:left;margin:14px auto 18px;padding-left:24px;line-height:1.9}
+  #result .you{color:var(--accent);font-weight:800}
+  #result .out{color:#ff8b8b}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="center"></div>
+
+<div id="menu" class="overlay">
+  <div class="box">
+    <h1>SHOOTING <span>RACE</span></h1>
+    <p class="sub">스킬을 사용해 레이싱하는 게임 · 3바퀴를 먼저 돌면 승리, 내구도가 0이 되면 탈락</p>
+
+    <h2>① 차량 선택</h2>
+    <div id="carList" class="grid cars"></div>
+
+    <h2>② 스킬 2개 선택 <span id="skillCount" class="hint"></span></h2>
+    <div id="skillList" class="grid skills"></div>
+
+    <div class="row">
+      <button id="startBtn" disabled>매칭 시작</button>
+      <span class="hint">
+        조작: <b>W/↑</b> 가속 · <b>S/↓</b> 브레이크 · <b>A D/←→</b> 조향 · <b>Shift/Space</b> 드리프트(에너지 충전) · <b>Q / E</b> 선택한 스킬 1 / 2
+      </span>
+    </div>
+  </div>
+</div>
+
+<div id="result"><div class="panel">
+  <h2 id="resTitle"></h2>
+  <div id="resSub" class="hint"></div>
+  <ol id="resList"></ol>
+  <button id="againBtn">다시 하기</button>
+</div></div>
+
+<script>
+'use strict';
+/* ===== 기획서 기반 데이터 ===== */
+const LAPS = 3;
+const MAX_ENERGY = 500;
+const CARS = [
+  {name:'밸런스 GT',  hp:100, max:540, acc:340, stab:.20, turn:2.3, color:'#4aa3ff', desc:'균형형 차량'},
+  {name:'스피드 스타', hp:80,  max:600, acc:380, stab:.08, turn:2.5, color:'#ff5a5a', desc:'빠르지만 약하다'},
+  {name:'아머 탱크',   hp:140, max:480, acc:300, stab:.35, turn:2.1, color:'#ffc94a', desc:'튼튼하지만 느리다'}
+];
+const SKILLS = {
+  boost:  {name:'광속 폭주', icon:'⚡', cd:20, cost:400, desc:'2.5초간 속도 폭증. 부딪힌 상대에게 피해',        flaw:'긴 대기시간, 큰 에너지 소모'},
+  meteor: {name:'메테오 볼', icon:'☄',  cd:8,  cost:150, desc:'전방으로 직진하는 포탄 (피해 18)',               flaw:'약한 데미지'},
+  homing: {name:'완전 탐지', icon:'◎',  cd:15, cost:200, desc:'가장 가까운 상대를 추적하는 유도탄 (피해 22)',   flaw:'주행 자체에는 도움이 안 됨'},
+  spike:  {name:'가시 발판', icon:'▲',  cd:2,  cost:30,  desc:'뒤에 가시를 설치. 밟은 상대는 피해와 감속',      flaw:'수동적이고 상황을 탐'},
+  heal:   {name:'치료',      icon:'✚',  cd:60, cost:350, desc:'4초간 내구도 회복',                             flaw:'회복 중 드리프트 불가, 받는 피해 증가'},
+  dash:   {name:'퀵 대시',   icon:'»',  cd:8,  cost:100, desc:'즉시 짧게 가속하며 이동',                       flaw:'공격성 없음'}
+};
+const SKILL_KEYS = Object.keys(SKILLS);
+
+/* ===== 캔버스 / 입력 ===== */
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+let W, H;
+function resize(){ W = cv.width = innerWidth; H = cv.height = innerHeight; }
+addEventListener('resize', resize); resize();
+const keys = {};
+addEventListener('keydown', e => {
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+  keys[e.code] = true;
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+/* ===== 트랙 (닫힌 스플라인) ===== */
+const CP = [[0,0],[700,-150],[1400,-50],[1900,350],[1700,900],[1000,1150],[550,800],[100,1000],[-500,800],[-650,250]];
+const track = [];
+(function buildTrack(){
+  const n = CP.length, S = 30;
+  for (let i = 0; i < n; i++){
+    const p0 = CP[(i-1+n)%n], p1 = CP[i], p2 = CP[(i+1)%n], p3 = CP[(i+2)%n];
+    for (let k = 0; k < S; k++){
+      const t = k/S, t2 = t*t, t3 = t2*t;
+      const f = j => 0.5*((2*p1[j]) + (-p0[j]+p2[j])*t + (2*p0[j]-5*p1[j]+4*p2[j]-p3[j])*t2 + (-p0[j]+3*p1[j]-3*p2[j]+p3[j])*t3);
+      track.push({x:f(0), y:f(1), a:0});
+    }
+  }
+  for (let i = 0; i < track.length; i++){
+    const a = track[i], b = track[(i+1)%track.length];
+    a.a = Math.atan2(b.y-a.y, b.x-a.x);
+  }
+})();
+const N = track.length;
+const TRACK_W = 240, OFF_DIST = TRACK_W/2, WALL_DIST = 230;
+const trackPath = new Path2D();
+track.forEach((p,i) => i ? trackPath.lineTo(p.x,p.y) : trackPath.moveTo(p.x,p.y));
+trackPath.closePath();
+
+/* ===== 상태 ===== */
+let state = 'menu';           // menu | matching | countdown | race | over
+let cars = [], player = null, projs = [], traps = [], parts = [];
+let time = 0, countdown = 0, shake = 0, selCar = 0, selSkills = [];
+let ranksAtEnd = null;
+
+/* ===== 메뉴 ===== */
+const carList = document.getElementById('carList');
+const skillList = document.getElementById('skillList');
+const startBtn = document.getElementById('startBtn');
+function renderMenu(){
+  carList.innerHTML = CARS.map((c,i) => `
+    <div class="card ${i===selCar?'sel':''}" data-car="${i}">
+      <b><span class="swatch" style="background:${c.color}"></span>${c.name}</b>
+      <div class="meta">${c.desc}<br>내구도 ${c.hp} · 최대 속력 ${c.max} · 안정성 ${Math.round(c.stab*100)}%</div>
+    </div>`).join('');
+  skillList.innerHTML = SKILL_KEYS.map(k => {
+    const s = SKILLS[k], idx = selSkills.indexOf(k);
+    return `<div class="card ${idx>=0?'sel':''}" data-skill="${k}">
+      <b>${s.icon} ${s.name}${idx>=0?` <span class="hint">[슬롯 ${idx+1}]</span>`:''}</b>
+      <div class="meta">${s.desc}<br>재사용 ${s.cd}초 · 에너지 ${s.cost}<br><span class="flaw">단점: ${s.flaw}</span></div>
+    </div>`;
+  }).join('');
+  document.getElementById('skillCount').textContent = `(${selSkills.length}/2)`;
+  startBtn.disabled = selSkills.length !== 2;
+}
+carList.addEventListener('click', e => {
+  const el = e.target.closest('[data-car]'); if (!el) return;
+  selCar = +el.dataset.car; renderMenu();
+});
+skillList.addEventListener('click', e => {
+  const el = e.target.closest('[data-skill]'); if (!el) return;
+  const k = el.dataset.skill, i = selSkills.indexOf(k);
+  if (i >= 0) selSkills.splice(i,1);
+  else if (selSkills.length < 2) selSkills.push(k);
+  renderMenu();
+});
+selSkills = ['meteor','spike'];
+renderMenu();
+
+startBtn.onclick = () => {
+  // 순서도: 매칭 시작 → 모든 플레이어가 참여했는가? → 게임 시작
+  document.getElementById('menu').classList.add('hidden');
+  state = 'matching';
+  const c = document.getElementById('center');
+  let joined = 1;
+  c.innerHTML = `<div class="msg">매칭 중... (${joined}/4)</div>`;
+  const iv = setInterval(() => {
+    joined++;
+    c.innerHTML = `<div class="msg">매칭 중... (${joined}/4)</div>`;
+    if (joined >= 4){ clearInterval(iv); startRace(); }
+  }, 450);
+};
+document.getElementById('againBtn').onclick = () => {
+  document.getElementById('result').style.display = 'none';
+  state = 'menu';
+  document.getElementById('menu').classList.remove('hidden');
+};
+
+/* ===== 차량 생성 ===== */
+function makeCar(type, skills, row, isPlayer, name){
+  const t = CARS[type];
+  const idx = (N - (3 + row*5)) % N;
+  const tp = track[idx];
+  const nx = -Math.sin(tp.a), ny = Math.cos(tp.a);
+  const off = (row%2 ? 55 : -55);
+  return {
+    name, isPlayer, color:t.color, skills, type,
+    x:tp.x+nx*off, y:tp.y+ny*off, a:tp.a, vx:0, vy:0,
+    hp:t.hp, maxHp:t.hp, stab:t.stab, max:t.max, acc:t.acc, turn:t.turn,
+    energy:300, cd:[0,0], idx, prog:-(3+row*5), dist:0,
+    alive:true, finished:false, finishTime:0,
+    slowT:0, slowF:0, boostT:0, dashT:0, healT:0, ramCd:0, flash:0, drifting:false,
+    aiT:0, lane:(Math.random()*2-1)*50, speed:0
+  };
+}
+function startRace(){
+  const c = document.getElementById('center');
+  cars = []; projs = []; traps = []; parts = []; time = 0; ranksAtEnd = null;
+  player = makeCar(selCar, selSkills.slice(), 0, true, '나');
+  cars.push(player);
+  for (let i = 1; i <= 3; i++){
+    const a = Math.floor(Math.random()*SKILL_KEYS.length);
+    let b; do { b = Math.floor(Math.random()*SKILL_KEYS.length); } while (b === a);
+    cars.push(makeCar(Math.floor(Math.random()*CARS.length), [SKILL_KEYS[a], SKILL_KEYS[b]], i, false, 'AI-'+i));
+  }
+  state = 'countdown'; countdown = 3.99;
+  c.innerHTML = '';
+}
+
+/* ===== 유틸 ===== */
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+function angDiff(a,b){ let d = b-a; while (d>Math.PI) d-=2*Math.PI; while (d<-Math.PI) d+=2*Math.PI; return d; }
+function burst(x,y,col,n=10,sp=160){
+  for (let i = 0; i < n; i++){
+    const a = Math.random()*Math.PI*2, s = Math.random()*sp;
+    parts.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s,life:.5,max:.5,col,r:3+Math.random()*3});
+  }
+}
+function damage(c, d){
+  if (!c.alive || c.finished) return;
+  let m = 1 - c.stab;
+  if (c.healT > 0) m *= 1.5;
+  c.hp -= d*m; c.flash = .2;
+  if (c.isPlayer) shake = .3;
+  if (c.hp <= 0){
+    c.hp = 0; c.alive = false;
+    burst(c.x,c.y,'#ff9d2e',30,260);
+  }
+}
+
+/* ===== 스킬 ===== */
+function useSkill(c, slot){
+  const k = c.skills[slot], d = SKILLS[k];
+  if (!c.alive || c.finished || c.cd[slot] > 0 || c.energy < d.cost) return false;
+  c.energy -= d.cost; c.cd[slot] = d.cd;
+  const fx = Math.cos(c.a), fy = Math.sin(c.a);
+  if (k === 'boost'){ c.boostT = 2.5; }
+  else if (k === 'meteor'){
+    projs.push({x:c.x+fx*26,y:c.y+fy*26,a:c.a,sp:780,owner:c,dmg:18,homing:false,life:1.6,col:'#ff7a2e'});
+  } else if (k === 'homing'){
+    let tgt = null, bd = 1000*1000;
+    for (const o of cars){
+      if (o === c || !o.alive) continue;
+      const dd = (o.x-c.x)**2 + (o.y-c.y)**2;
+      if (dd < bd){ bd = dd; tgt = o; }
+    }
+    projs.push({x:c.x+fx*26,y:c.y+fy*26,a:c.a,sp:560,owner:c,dmg:22,homing:true,target:tgt,life:3.2,col:'#6cf0ff'});
+  } else if (k === 'spike'){
+    traps.push({x:c.x-fx*34,y:c.y-fy*34,owner:c,life:25});
+  } else if (k === 'heal'){ c.healT = 4; }
+  else if (k === 'dash'){ c.dashT = .7; }
+  return true;
+}
+
+/* ===== 차량 물리 ===== */
+function updateIdx(c){
+  let best = c.idx, bd = 1e18;
+  for (let o = -40; o <= 40; o++){
+    const i = (c.idx+o+N)%N, dx = c.x-track[i].x, dy = c.y-track[i].y, d = dx*dx+dy*dy;
+    if (d < bd){ bd = d; best = i; }
+  }
+  let dl = best - c.idx;
+  if (dl > N/2) dl -= N; if (dl < -N/2) dl += N;
+  c.prog += dl; c.idx = best; c.dist = Math.sqrt(bd);
+}
+function stepCar(c, dt, inp){
+  c.flash = Math.max(0, c.flash-dt);
+  if (!c.alive){
+    const f = Math.exp(-3*dt); c.vx *= f; c.vy *= f;
+    c.x += c.vx*dt; c.y += c.vy*dt; c.speed = 0; return;
+  }
+  for (let i = 0; i < 2; i++) c.cd[i] = Math.max(0, c.cd[i]-dt);
+  c.slowT = Math.max(0,c.slowT-dt); c.boostT = Math.max(0,c.boostT-dt);
+  c.dashT = Math.max(0,c.dashT-dt); c.healT = Math.max(0,c.healT-dt); c.ramCd = Math.max(0,c.ramCd-dt);
+  if (c.healT > 0) c.hp = Math.min(c.maxHp, c.hp + 8*(c.maxHp/100)*dt);
+  if (c.finished){ inp = {thr:false,brk:false,steer:0,drift:false}; }
+
+  const fx = Math.cos(c.a), fy = Math.sin(c.a), sx = -fy, sy = fx;
+  let vf = c.vx*fx + c.vy*fy, vl = c.vx*sx + c.vy*sy;
+  const drifting = inp.drift && c.healT <= 0 && vf > 140;
+  c.drifting = drifting;
+
+  let cap = c.max;
+  if (c.dist > OFF_DIST) cap *= .55;
+  if (c.slowT > 0) cap *= (1 - c.slowF);
+  if (c.boostT > 0) cap *= 1.6;
+  if (c.dashT > 0) cap *= 1.35;
+
+  if (inp.thr){ if (vf < cap) vf += c.acc*dt; }
+  else vf -= Math.sign(vf)*Math.min(Math.abs(vf), 140*dt);
+  if (c.boostT > 0) vf = Math.min(vf + 900*dt, cap);
+  if (c.dashT > 0)  vf = Math.min(vf + 1500*dt, cap);
+  if (inp.brk) vf -= 450*dt;
+  if (drifting) vf -= 60*dt;                       // 드리프트: 속력 감소
+  if (vf > cap) vf -= (vf-cap)*3*dt;
+  vf = Math.max(vf, -120);
+
+  c.a += inp.steer * c.turn * (drifting ? 1.6 : 1) * clamp(vf/200,-1,1) * dt;
+  vl *= Math.exp(-(drifting ? 1.8 : 10)*dt);       // 드리프트 시 미끄러짐
+
+  const nfx = Math.cos(c.a), nfy = Math.sin(c.a);
+  c.vx = nfx*vf + (-nfy)*vl; c.vy = nfy*vf + nfx*vl;
+  c.x += c.vx*dt; c.y += c.vy*dt;
+  c.speed = Math.hypot(c.vx,c.vy);
+
+  // 에너지 충전: 기본 + 가속 + 드리프트
+  c.energy = Math.min(MAX_ENERGY, c.energy + (22 + (inp.thr?10:0) + (drifting?60:0))*dt);
+
+  updateIdx(c);
+  if (c.dist > WALL_DIST){                          // 코스 이탈 한계
+    const tp = track[c.idx], dx = tp.x-c.x, dy = tp.y-c.y, L = Math.hypot(dx,dy)||1;
+    c.x += dx/L*(c.dist-WALL_DIST); c.y += dy/L*(c.dist-WALL_DIST);
+    c.vx *= .9; c.vy *= .9;
+  }
+  if (!c.finished && c.prog >= LAPS*N){ c.finished = true; c.finishTime = time; }
+
+  if (drifting && Math.random() < .7)
+    parts.push({x:c.x-nfx*14,y:c.y-nfy*14,vx:-nfx*30+(Math.random()-.5)*30,vy:-nfy*30+(Math.random()-.5)*30,life:.6,max:.6,col:'#cfd6e0',r:4+Math.random()*3});
+  if (c.boostT > 0 || c.dashT > 0)
+    parts.push({x:c.x-nfx*18,y:c.y-nfy*18,vx:-nfx*120+(Math.random()-.5)*40,vy:-nfy*120+(Math.random()-.5)*40,life:.35,max:.35,col:'#ffb020',r:4+Math.random()*3});
+}
+
+/* ===== AI ===== */
+function aiInput(c, dt){
+  const look = (c.idx + 12) % N, tp = track[look];
+  const nx = -Math.sin(tp.a), ny = Math.cos(tp.a);
+  const tx = tp.x + nx*c.lane, ty = tp.y + ny*c.lane;
+  const diff = angDiff(c.a, Math.atan2(ty-c.y, tx-c.x));
+  const inp = {steer: clamp(diff*2.6,-1,1), thr:true, brk:false, drift:false};
+  if (Math.abs(diff) > .7) inp.thr = false;
+  if (Math.abs(diff) > .45 && c.speed > 330) inp.drift = true;
+  c.aiT -= dt;
+  if (c.aiT <= 0){
+    c.aiT = .45;
+    for (let s = 0; s < 2; s++){
+      const k = c.skills[s], d = SKILLS[k];
+      if (c.cd[s] > 0 || c.energy < d.cost) continue;
+      let go = false;
+      if (k === 'meteor' || k === 'homing'){
+        for (const o of cars){
+          if (o === c || !o.alive) continue;
+          const dx = o.x-c.x, dy = o.y-c.y, dist = Math.hypot(dx,dy);
+          if (dist < 650 && Math.abs(angDiff(c.a, Math.atan2(dy,dx))) < (k==='meteor' ? .22 : .8)) go = true;
+        }
+      } else if (k === 'spike'){
+        for (const o of cars){
+          if (o === c || !o.alive) continue;
+          const dx = o.x-c.x, dy = o.y-c.y;
+          if (Math.hypot(dx,dy) < 320 && Math.abs(angDiff(c.a+Math.PI, Math.atan2(dy,dx))) < .6) go = true;
+        }
+      } else if (k === 'heal') go = c.hp < c.maxHp*.5;
+      else go = Math.abs(diff) < .12 && Math.random() < .5;
+      if (go) useSkill(c, s);
+    }
+  }
+  return inp;
+}
+
+/* ===== 업데이트 ===== */
+function rankKey(c){
+  if (!c.alive) return -1e7 + c.prog;
+  if (c.finished) return 1e7 - c.finishTime;
+  return c.prog;
+}
+function standings(){ return cars.slice().sort((a,b) => rankKey(b) - rankKey(a)); }
+
+function endRace(){
+  state = 'over';
+  const st = standings(), rank = st.indexOf(player) + 1;
+  const win = player.alive && rank === 1;
+  document.getElementById('resTitle').textContent =
+    !player.alive ? '패배 · 레이스 탈락' : win ? '🏆 승리! 1위' : `${rank}위 완주`;
+  document.getElementById('resSub').textContent =
+    !player.alive ? '내구도가 0이 되어 순위권에서 제외되었습니다.' : `${LAPS}바퀴를 완주했습니다.`;
+  document.getElementById('resList').innerHTML = st.map(c =>
+    `<li class="${c.isPlayer?'you':''} ${c.alive?'':'out'}">${c.name}${c.alive?(c.finished?' · 완주':` · ${Math.max(0,Math.floor(c.prog/N*100/LAPS))}% 진행`):' · 탈락'}</li>`).join('');
+  document.getElementById('result').style.display = 'flex';
+}
+
+function update(dt){
+  time += dt;
+  if (state === 'countdown'){
+    countdown -= dt;
+    const n = Math.floor(countdown);
+    if (n >= 1) document.getElementById('center').innerHTML = `<div class="big">${n}</div>`;
+    else {
+      state = 'race'; time = 0;
+      document.getElementById('center').innerHTML = `<div class="big">GO!</div>`;
+      setTimeout(() => { if (state === 'race') document.getElementById('center').innerHTML = ''; }, 700);
+    }
+  }
+  if (state === 'countdown') return;
+
+  const racing = state === 'race' || state === 'over';
+  for (const c of cars){
+    let inp;
+    if (c.isPlayer){
+      inp = state === 'race' ? {
+        thr: keys.KeyW || keys.ArrowUp, brk: keys.KeyS || keys.ArrowDown,
+        steer: ((keys.KeyD||keys.ArrowRight)?1:0) - ((keys.KeyA||keys.ArrowLeft)?1:0),
+        drift: keys.ShiftLeft || keys.ShiftRight || keys.Space
+      } : {thr:false,brk:false,steer:0,drift:false};
+      if (state === 'race'){
+        if (keys.KeyQ){ useSkill(c,0); keys.KeyQ = false; }
+        if (keys.KeyE){ useSkill(c,1); keys.KeyE = false; }
+      }
+    } else inp = c.alive && !c.finished && racing ? aiInput(c,dt) : {thr:false,brk:false,steer:0,drift:false};
+    stepCar(c, dt, inp);
+  }
+
+  // 차량끼리 충돌
+  for (let i = 0; i < cars.length; i++) for (let j = i+1; j < cars.length; j++){
+    const a = cars[i], b = cars[j];
+    if (!a.alive || !b.alive) continue;
+    const dx = b.x-a.x, dy = b.y-a.y, d = Math.hypot(dx,dy);
+    if (d < 32 && d > 0){
+      const nx = dx/d, ny = dy/d, push = (32-d)/2;
+      a.x -= nx*push; a.y -= ny*push; b.x += nx*push; b.y += ny*push;
+      a.vx *= .96; a.vy *= .96; b.vx *= .96; b.vy *= .96;
+      if (a.boostT > 0 && a.ramCd <= 0){ damage(b,22); a.ramCd = .6; burst(b.x,b.y,'#ffb020'); }
+      if (b.boostT > 0 && b.ramCd <= 0){ damage(a,22); b.ramCd = .6; burst(a.x,a.y,'#ffb020'); }
+    }
+  }
+  // 투사체
+  for (let i = projs.length-1; i >= 0; i--){
+    const p = projs[i];
+    p.life -= dt;
+    if (p.homing && p.target && p.target.alive){
+      const want = Math.atan2(p.target.y-p.y, p.target.x-p.x);
+      p.a += clamp(angDiff(p.a,want), -3*dt, 3*dt);
+    }
+    p.x += Math.cos(p.a)*p.sp*dt; p.y += Math.sin(p.a)*p.sp*dt;
+    parts.push({x:p.x,y:p.y,vx:0,vy:0,life:.25,max:.25,col:p.col,r:4});
+    let hit = false;
+    for (const c of cars){
+      if (c === p.owner || !c.alive) continue;
+      if (Math.hypot(c.x-p.x,c.y-p.y) < 24){ damage(c,p.dmg); burst(p.x,p.y,p.col,14); hit = true; break; }
+    }
+    if (hit || p.life <= 0) projs.splice(i,1);
+  }
+  // 가시 발판
+  for (let i = traps.length-1; i >= 0; i--){
+    const t = traps[i]; t.life -= dt;
+    let hit = false;
+    for (const c of cars){
+      if (c === t.owner || !c.alive) continue;
+      if (Math.hypot(c.x-t.x,c.y-t.y) < 26){
+        damage(c,12); c.slowT = 2; c.slowF = .5; burst(t.x,t.y,'#ffd0d0',12); hit = true; break;
+      }
+    }
+    if (hit || t.life <= 0) traps.splice(i,1);
+  }
+  for (let i = parts.length-1; i >= 0; i--){
+    const p = parts[i]; p.life -= dt; p.x += p.vx*dt; p.y += p.vy*dt;
+    if (p.life <= 0) parts.splice(i,1);
+  }
+  shake = Math.max(0, shake - dt);
+
+  if (state === 'race' && (player.finished || !player.alive)) endRace();
+}
+
+/* ===== 그리기 ===== */
+function drawCar(c){
+  ctx.save(); ctx.translate(c.x,c.y); ctx.rotate(c.a);
+  if (!c.alive){ ctx.globalAlpha = .55; }
+  ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fillRect(-17,-8,36,20);
+  ctx.fillStyle = c.flash > 0 ? '#fff' : c.color;
+  ctx.beginPath(); ctx.roundRect(-18,-10,36,20,5); ctx.fill();
+  ctx.fillStyle = '#10151c'; ctx.fillRect(2,-7,9,14);
+  ctx.fillStyle = '#ff3b3b'; ctx.fillRect(-18,-8,3,5); ctx.fillRect(-18,3,3,5);
+  if (c.healT > 0){ ctx.strokeStyle = '#4cff9a'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(0,0,26,0,7); ctx.stroke(); }
+  if (c.slowT > 0){ ctx.strokeStyle = '#ff6b6b'; ctx.lineWidth = 2; ctx.setLineDash([5,4]); ctx.beginPath(); ctx.arc(0,0,24,0,7); ctx.stroke(); ctx.setLineDash([]); }
+  ctx.restore();
+  if (c.alive){
+    ctx.fillStyle = c.isPlayer ? '#ffb020' : '#c9d1d9'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(c.name, c.x, c.y-26);
+    ctx.fillStyle = '#000'; ctx.fillRect(c.x-18,c.y-22,36,4);
+    ctx.fillStyle = '#4cff9a'; ctx.fillRect(c.x-18,c.y-22,36*c.hp/c.maxHp,4);
+  }
+}
+
+function drawWorld(){
+  ctx.fillStyle = '#1b3a24'; ctx.fillRect(0,0,W,H);
+  const zoom = .85 - clamp(player.speed/1500,0,.12);
+  const sx = shake > 0 ? (Math.random()-.5)*10*shake*3 : 0, sy = shake > 0 ? (Math.random()-.5)*10*shake*3 : 0;
+  ctx.save();
+  ctx.translate(W/2+sx, H/2+sy); ctx.scale(zoom,zoom); ctx.translate(-player.x,-player.y);
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.lineWidth = TRACK_W+44; ctx.strokeStyle = '#eee'; ctx.stroke(trackPath);
+  ctx.lineWidth = TRACK_W+44; ctx.strokeStyle = '#d33'; ctx.setLineDash([32,32]); ctx.stroke(trackPath); ctx.setLineDash([]);
+  ctx.lineWidth = TRACK_W; ctx.strokeStyle = '#3a3d45'; ctx.stroke(trackPath);
+  ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.setLineDash([36,36]); ctx.stroke(trackPath); ctx.setLineDash([]);
+  // 출발선
+  const s = track[0];
+  ctx.save(); ctx.translate(s.x,s.y); ctx.rotate(s.a);
+  for (let i = 0; i < 12; i++){ ctx.fillStyle = i%2 ? '#fff' : '#111'; ctx.fillRect(-8,-TRACK_W/2+i*(TRACK_W/12),8,TRACK_W/12);
+    ctx.fillStyle = i%2 ? '#111' : '#fff'; ctx.fillRect(0,-TRACK_W/2+i*(TRACK_W/12),8,TRACK_W/12); }
+  ctx.restore();
+  for (const t of traps){
+    ctx.save(); ctx.translate(t.x,t.y);
+    ctx.fillStyle = '#ff6b6b'; ctx.beginPath();
+    for (let i = 0; i < 6; i++){ const a = i*Math.PI/3; ctx.lineTo(Math.cos(a)*12,Math.sin(a)*12); ctx.lineTo(Math.cos(a+Math.PI/6)*5,Math.sin(a+Math.PI/6)*5); }
+    ctx.fill(); ctx.restore();
+  }
+  for (const p of parts){
+    ctx.globalAlpha = clamp(p.life/p.max,0,1); ctx.fillStyle = p.col;
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  for (const p of projs){
+    ctx.fillStyle = p.col; ctx.shadowColor = p.col; ctx.shadowBlur = 14;
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.homing?7:9,0,7); ctx.fill(); ctx.shadowBlur = 0;
+  }
+  for (const c of cars) if (!c.alive) drawCar(c);
+  for (const c of cars) if (c.alive) drawCar(c);
+  ctx.restore();
+}
+
+function bar(x,y,w,h,v,col,label){
+  ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(x,y,w,h);
+  ctx.fillStyle = col; ctx.fillRect(x,y,w*clamp(v,0,1),h);
+  ctx.strokeStyle = '#555'; ctx.strokeRect(x,y,w,h);
+  ctx.fillStyle = '#fff'; ctx.font = '12px sans-serif'; ctx.textAlign = 'left'; ctx.fillText(label,x+6,y+h-5);
+}
+function drawHUD(){
+  const st = standings(), rank = st.indexOf(player)+1;
+  const lap = clamp(Math.floor(Math.max(player.prog,0)/N)+1, 1, LAPS);
+  ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(14,14,170,66);
+  ctx.fillStyle = '#fff'; ctx.textAlign = 'left';
+  ctx.font = 'bold 22px sans-serif'; ctx.fillText(`${rank} / ${cars.length}위`, 26, 42);
+  ctx.font = '15px sans-serif'; ctx.fillText(`LAP ${lap} / ${LAPS}`, 26, 66);
+
+  bar(14, H-92, 260, 22, player.hp/player.maxHp, '#3fb950', `내구도 ${Math.ceil(player.hp)} / ${player.maxHp}  (안정성 ${Math.round(player.stab*100)}%)`);
+  bar(14, H-62, 260, 22, player.energy/MAX_ENERGY, '#4aa3ff', `에너지 ${Math.floor(player.energy)}`);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 20px sans-serif'; ctx.fillText(`${Math.round(player.speed)} km/h`, 14, H-102);
+
+  for (let s = 0; s < 2; s++){
+    const k = player.skills[s], d = SKILLS[k], x = W/2 + (s ? 12 : -152), y = H-96, w = 140, h = 78;
+    const ready = player.cd[s] <= 0 && player.energy >= d.cost;
+    ctx.fillStyle = 'rgba(0,0,0,.65)'; ctx.fillRect(x,y,w,h);
+    ctx.strokeStyle = ready ? '#ffb020' : '#555'; ctx.lineWidth = 2; ctx.strokeRect(x,y,w,h);
+    ctx.fillStyle = ready ? '#fff' : '#888'; ctx.textAlign = 'left';
+    ctx.font = 'bold 22px sans-serif'; ctx.fillText(d.icon, x+10, y+34);
+    ctx.font = 'bold 15px sans-serif'; ctx.fillText(d.name, x+40, y+30);
+    ctx.font = '12px sans-serif'; ctx.fillText(`에너지 ${d.cost}`, x+10, y+54);
+    ctx.fillStyle = '#ffb020'; ctx.font = 'bold 14px sans-serif'; ctx.fillText(s ? '[E]' : '[Q]', x+10, y+72);
+    if (player.cd[s] > 0){
+      ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(x, y, w*(player.cd[s]/d.cd), h);
+      ctx.fillStyle = '#fff'; ctx.font = 'bold 18px sans-serif'; ctx.textAlign = 'right'; ctx.fillText(player.cd[s].toFixed(1)+'s', x+w-8, y+72);
+    }
+  }
+  // 미니맵
+  const sc = .075, mw = 2550*sc+20, mh = 1300*sc+20, mx = W-mw-14, my = 14;
+  ctx.fillStyle = 'rgba(0,0,0,.55)'; ctx.fillRect(mx,my,mw,mh);
+  ctx.save(); ctx.translate(mx+10-(-650)*sc, my+10-(-150)*sc); ctx.scale(sc,sc);
+  ctx.lineWidth = 60; ctx.strokeStyle = '#6b7280'; ctx.lineJoin = 'round'; ctx.stroke(trackPath);
+  for (const c of cars){ ctx.fillStyle = c.alive ? (c.isPlayer ? '#ffb020' : c.color) : '#444'; ctx.beginPath(); ctx.arc(c.x,c.y,c.isPlayer?55:40,0,7); ctx.fill(); }
+  ctx.restore();
+  ctx.fillStyle = 'rgba(255,255,255,.5)'; ctx.font = '12px sans-serif'; ctx.textAlign = 'right';
+  ctx.fillText('W 가속 · A/D 조향 · Shift 드리프트 · Q/E 스킬', W-14, H-14);
+}
+
+/* ===== 메인 루프 ===== */
+let last = performance.now();
+function loop(now){
+  const dt = Math.min(.05, (now-last)/1000); last = now;
+  if (player && (state === 'countdown' || state === 'race' || state === 'over')){
+    update(dt); drawWorld(); drawHUD();
+  } else {
+    ctx.fillStyle = '#0d1117'; ctx.fillRect(0,0,W,H);
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+window.__game = {get state(){return state}, get cars(){return cars}, get player(){return player}, startRace, keys};
+</script>
+</body>
+</html>
